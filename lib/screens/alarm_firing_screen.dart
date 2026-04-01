@@ -270,6 +270,7 @@ class _AlarmFiringScreenState extends State<AlarmFiringScreen>
   void _snooze() async {
     _timer?.cancel();
     await AudioService.stop();
+    await AlarmScheduler.stopAlarmService();
     _snoozeCount++;
     widget.alarm.snoozeCount++;
     final now = DateTime.now().add(const Duration(minutes: 5));
@@ -295,6 +296,7 @@ class _AlarmFiringScreenState extends State<AlarmFiringScreen>
   void dispose() {
     _timer?.cancel();
     AudioService.stop();
+    AlarmScheduler.stopAlarmService();
     _bellController.dispose();
     _glowController.dispose();
     super.dispose();
