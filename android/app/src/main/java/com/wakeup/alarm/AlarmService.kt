@@ -133,7 +133,7 @@ class AlarmService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("⏰ $label")
             .setContentText("Toca para resolver el reto")
-            .setSmallIcon(android.R.drawable.ic_lock_alarm)
+            .setSmallIcon(android.R.drawable.ic_popup_reminder)
             .setContentIntent(pi)
             .setFullScreenIntent(pi, true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
