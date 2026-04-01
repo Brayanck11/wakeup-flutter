@@ -34,7 +34,7 @@ class AlarmService : Service() {
         val gradual = intent?.getBooleanExtra("gradual", false) ?: false
 
         // Notificación que al tocarla abre la app con el reto
-        val openIntent = Intent(this, MainActivity::class.java).apply {
+        var openIntent = Intent(this, MainActivity::class.java).apply {
             action = "FIRE_ALARM"
             flags  = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("alarm_label",   label)
