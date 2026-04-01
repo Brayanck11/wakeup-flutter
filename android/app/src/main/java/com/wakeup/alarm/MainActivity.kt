@@ -17,76 +17,137 @@ import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.wakeup.alarm/ringtone"
     private val ALARM_CHANNEL = "com.wakeup.alarm/alarm_manager"
+    private val EVENT_CHANNEL = "com.wakeup.alarm/alarm_events"
     private var mediaPlayer: MediaPlayer? = null
+    private var alarmEventSink: EventChannel.EventSink? = null
+
+    companion object {
+        // Datos de la alarma pendiente para enviarse a Flutter cuando esté listo
+        var pendingAlarmLabel: String? = null
+        var pendingAlarmSound: String? = null
+        var pendingAlarmGradual: Boolean = false
+        var pendingAlarmId: Int = -1
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Leer intent si vino desde AlarmReceiver
+        handleAlarmIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleAlarmIntent(intent)
+    }
+
+    private fun handleAlarmIntent(intent: Intent?) {
+        if (intent?.action == "FIRE_ALARM") {
+            pendingAlarmLabel = intent.getStringExtra("alarm_label") ?: "WAKE UP"
+            pendingAlarmSound = intent.getStringExtra("alarm_sound") ?: ""
+            pendingAlarmGradual = intent.getBooleanExtra("alarm_gradual", false)
+            pendingAlarmId = intent.getIntExtra("alarm_id", -1)
+            // Notificar a Flutter si ya está listo
+            alarmEventSink?.success(mapOf(
+                "label" to pendingAlarmLabel,
+                "sound" to pendingAlarmSound,
+                "gradual" to pendingAlarmGradual,
+                "id" to pendingAlarmId
+            ))
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Canal de audio/ringtone
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "playRingtone" -> {
-                    val uri = call.argument<String>("uri")
-                    val volume = (call.argument<Double>("volume") ?: 1.0).toFloat()
-                    val loop = call.argument<Boolean>("loop") ?: true
-                    playRingtone(uri, volume, loop)
-                    result.success(null)
+        // EventChannel: envía eventos de alarma a Flutter
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, sink: EventChannel.EventSink?) {
+                    alarmEventSink = sink
+                    // Si hay una alarma pendiente cuando Flutter se conecta, enviarla ahora
+                    if (pendingAlarmLabel != null) {
+                        sink?.success(mapOf(
+                            "label" to pendingAlarmLabel,
+                            "sound" to pendingAlarmSound,
+                            "gradual" to pendingAlarmGradual,
+                            "id" to pendingAlarmId
+                        ))
+                        pendingAlarmLabel = null
+                    }
                 }
-                "stopRingtone" -> { stopRingtone(); result.success(null) }
-                "setVolume" -> {
-                    val volume = (call.argument<Double>("volume") ?: 1.0).toFloat()
-                    mediaPlayer?.setVolume(volume, volume)
-                    result.success(null)
-                }
-                "getSystemRingtones" -> result.success(getSystemRingtones())
-                else -> result.notImplemented()
-            }
-        }
+                override fun onCancel(args: Any?) { alarmEventSink = null }
+            })
 
-        // Canal de gestión de alarmas del sistema
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ALARM_CHANNEL).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "scheduleAlarm" -> {
-                    val id = call.argument<Int>("id") ?: 0
-                    val triggerMs = call.argument<Long>("triggerMs") ?: 0L
-                    val label = call.argument<String>("label") ?: "WAKE UP"
-                    val sound = call.argument<String>("sound") ?: ""
-                    val gradual = call.argument<Boolean>("gradual") ?: false
-                    scheduleAlarm(id, triggerMs, label, sound, gradual)
-                    result.success(null)
+        // MethodChannel: audio/ringtone
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "playRingtone" -> {
+                        playRingtone(
+                            call.argument("uri"),
+                            (call.argument<Double>("volume") ?: 1.0).toFloat(),
+                            call.argument<Boolean>("loop") ?: true
+                        )
+                        result.success(null)
+                    }
+                    "stopRingtone" -> { stopRingtone(); result.success(null) }
+                    "setVolume" -> {
+                        mediaPlayer?.setVolume(
+                            (call.argument<Double>("volume") ?: 1.0).toFloat(),
+                            (call.argument<Double>("volume") ?: 1.0).toFloat()
+                        )
+                        result.success(null)
+                    }
+                    "getSystemRingtones" -> result.success(getSystemRingtones())
+                    else -> result.notImplemented()
                 }
-                "cancelAlarm" -> {
-                    val id = call.argument<Int>("id") ?: 0
-                    cancelAlarm(id)
-                    result.success(null)
-                }
-                "stopAlarmService" -> {
-                    stopService(Intent(this, AlarmService::class.java))
-                    result.success(null)
-                }
-                "requestBatteryOptimization" -> {
-                    requestIgnoreBatteryOptimizations()
-                    result.success(null)
-                }
-                "requestExactAlarm" -> {
-                    requestExactAlarmPermission()
-                    result.success(null)
-                }
-                "checkPermissions" -> {
-                    result.success(mapOf(
-                        "notifications" to NotificationManagerCompat.from(this).areNotificationsEnabled(),
-                        "exactAlarm" to hasExactAlarmPermission(),
-                        "batteryOptimization" to isIgnoringBatteryOptimizations()
-                    ))
-                }
-                else -> result.notImplemented()
             }
-        }
+
+        // MethodChannel: gestión de alarmas
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ALARM_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "scheduleAlarm" -> {
+                        scheduleAlarm(
+                            call.argument<Int>("id") ?: 0,
+                            call.argument<Long>("triggerMs") ?: 0L,
+                            call.argument<String>("label") ?: "WAKE UP",
+                            call.argument<String>("sound") ?: "",
+                            call.argument<Boolean>("gradual") ?: false
+                        )
+                        result.success(null)
+                    }
+                    "cancelAlarm" -> {
+                        cancelAlarm(call.argument<Int>("id") ?: 0)
+                        result.success(null)
+                    }
+                    "stopAlarmService" -> {
+                        stopService(Intent(this, AlarmService::class.java))
+                        pendingAlarmLabel = null
+                        result.success(null)
+                    }
+                    "requestBatteryOptimization" -> {
+                        requestIgnoreBatteryOptimizations(); result.success(null)
+                    }
+                    "requestExactAlarm" -> {
+                        requestExactAlarmPermission(); result.success(null)
+                    }
+                    "checkPermissions" -> {
+                        result.success(mapOf(
+                            "notifications" to NotificationManagerCompat.from(this).areNotificationsEnabled(),
+                            "exactAlarm" to hasExactAlarmPermission(),
+                            "batteryOptimization" to isIgnoringBatteryOptimizations()
+                        ))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     private fun scheduleAlarm(id: Int, triggerMs: Long, label: String, sound: String, gradual: Boolean) {
@@ -99,7 +160,6 @@ class MainActivity : FlutterActivity() {
         }
         val pi = PendingIntent.getBroadcast(this, id, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
         val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am.canScheduleExactAlarms()) {
@@ -118,52 +178,39 @@ class MainActivity : FlutterActivity() {
         val intent = Intent(this, AlarmReceiver::class.java)
         val pi = PendingIntent.getBroadcast(this, id, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        am.cancel(pi)
+        (getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi)
     }
 
     private fun hasExactAlarmPermission(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            return am.canScheduleExactAlarms()
+            return (getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
         }
         return true
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        return pm.isIgnoringBatteryOptimizations(packageName)
+        return (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .isIgnoringBatteryOptimizations(packageName)
     }
 
     private fun requestIgnoreBatteryOptimizations() {
         if (!isIgnoringBatteryOptimizations()) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                 data = Uri.parse("package:$packageName")
-            }
-            startActivity(intent)
+            })
         }
     }
 
     private fun requestExactAlarmPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasExactAlarmPermission()) {
-            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-            startActivity(intent)
+            startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
         }
     }
 
     private fun playRingtone(uriString: String?, volume: Float, loop: Boolean) {
         try {
             stopRingtone()
-            val uri: Uri = when {
-                uriString.isNullOrEmpty() || uriString == "beep" || uriString == "default_alarm" ->
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                uriString == "default_ringtone" ->
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                uriString.startsWith("content://") || uriString.startsWith("android.resource://") ->
-                    Uri.parse(uriString)
-                uriString.startsWith("/") -> Uri.parse("file://$uriString")
-                else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            }
+            val uri = resolveUri(uriString)
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(AudioAttributes.Builder()
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
@@ -181,12 +228,22 @@ class MainActivity : FlutterActivity() {
                 val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 mediaPlayer = MediaPlayer().apply {
                     setDataSource(applicationContext, defaultUri)
-                    isLooping = loop
-                    setVolume(volume, volume)
-                    prepare()
-                    start()
+                    isLooping = loop; setVolume(volume, volume); prepare(); start()
                 }
             } catch (ex: Exception) { ex.printStackTrace() }
+        }
+    }
+
+    private fun resolveUri(uriString: String?): Uri {
+        return when {
+            uriString.isNullOrEmpty() || uriString == "beep" || uriString == "default_alarm" ->
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            uriString == "default_ringtone" ->
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            uriString.startsWith("content://") || uriString.startsWith("android.resource://") ->
+                Uri.parse(uriString)
+            uriString.startsWith("/") -> Uri.parse("file://$uriString")
+            else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         }
     }
 
