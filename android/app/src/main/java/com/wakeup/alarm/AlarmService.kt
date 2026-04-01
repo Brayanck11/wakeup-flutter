@@ -29,18 +29,17 @@ class AlarmService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val label  = intent?.getStringExtra("label")   ?: "WAKE UP"
-        val sound  = intent?.getStringExtra("sound")   ?: ""
-        val gradual = intent?.getBooleanExtra("gradual", false) ?: false
+        val label   = intent?.getStringExtra("label")            ?: "WAKE UP"
+        val sound   = intent?.getStringExtra("sound")            ?: ""
+        val gradual = intent?.getBooleanExtra("gradual", false)  ?: false
 
-        // Notificación que al tocarla abre la app con el reto
-        var openIntent = Intent(this, MainActivity::class.java).apply {
-            action = "FIRE_ALARM"
-            flags  = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("alarm_label",   label)
-            putExtra("alarm_sound",   sound)
-            putExtra("alarm_gradual", gradual)
-        }
+        val openIntent = Intent(this, MainActivity::class.java)
+        openIntent.action = "FIRE_ALARM"
+        openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        openIntent.putExtra("alarm_label",   label)
+        openIntent.putExtra("alarm_sound",   sound)
+        openIntent.putExtra("alarm_gradual", gradual)
+
         val pi = PendingIntent.getActivity(
             this, 0, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -51,18 +50,15 @@ class AlarmService : Service() {
             .setContentText("Toca para resolver el reto y apagar la alarma")
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
             .setContentIntent(pi)
-            .setFullScreenIntent(pi, true)   // ← muestra en pantalla de bloqueo
+            .setFullScreenIntent(pi, true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOngoing(true)                // ← no se puede deslizar para cerrar
+            .setOngoing(true)
             .setAutoCancel(false)
             .build()
 
         startForeground(NOTIF_ID, notification)
-
-        // Reproducir sonido — NO se detiene solo, solo se detiene cuando
-        // el usuario resuelve el reto o pulsa posponer
         playSound(sound, gradual)
         vibrate()
 
@@ -72,7 +68,7 @@ class AlarmService : Service() {
     private fun playSound(soundUri: String, gradual: Boolean) {
         stopSound()
         try {
-            val uri: Uri = resolveUri(soundUri)
+            val uri = resolveUri(soundUri)
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -154,7 +150,7 @@ class AlarmService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID, "Alarmas WAKE UP", NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                setBypassDnd(true)             // ← ignora modo no molestar
+                setBypassDnd(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 enableVibration(true)
                 setShowBadge(true)
@@ -176,7 +172,6 @@ class AlarmService : Service() {
         isRunning = false
         stopSound()
         try { wakeLock?.release() } catch (_: Exception) {}
-        // Cancelar vibración
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager)
