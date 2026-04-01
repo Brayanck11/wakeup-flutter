@@ -11,6 +11,7 @@ class AppTheme {
   static const Color blue = Color(0xFF0A84FF);
   static const Color purple = Color(0xFFBF5AF2);
   static const Color yellow = Color(0xFFFFD60A);
+  static const Color teal = Color(0xFF5AC8FA);
   static const Color textColor = Color(0xFFF5F5FA);
   static const Color muted = Color(0xFF636380);
 
