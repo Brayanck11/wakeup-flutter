@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../models/alarm.dart';
 import '../services/storage_service.dart';
 import '../services/audio_service.dart';
+import '../services/alarm_scheduler.dart';
 
 class AlarmFiringScreen extends StatefulWidget {
   final Alarm alarm;
@@ -239,6 +240,7 @@ class _AlarmFiringScreenState extends State<AlarmFiringScreen>
     _bellController.stop();
     _glowController.stop();
     await AudioService.stop();
+    await AlarmScheduler.stopAlarmService(); // Detener foreground service
 
     final history = await StorageService.loadHistory();
     history.insert(0, {
