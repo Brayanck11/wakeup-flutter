@@ -1,9 +1,11 @@
 package com.wakeup.alarm
 
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
+import android.content.Context
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -11,17 +13,28 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.wakeup.alarm/ringtone"
     private var mediaPlayer: MediaPlayer? = null
+    private var audioManager: AudioManager? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "playRingtone" -> {
-                    playRingtone(call.argument<String>("uri"))
+                    val uri = call.argument<String>("uri")
+                    val volume = call.argument<Double>("volume") ?: 1.0
+                    val loop = call.argument<Boolean>("loop") ?: true
+                    playRingtone(uri, volume.toFloat(), loop)
                     result.success(null)
                 }
                 "stopRingtone" -> {
                     stopRingtone()
+                    result.success(null)
+                }
+                "setVolume" -> {
+                    val volume = call.argument<Double>("volume") ?: 1.0
+                    setVolume(volume.toFloat())
                     result.success(null)
                 }
                 "getSystemRingtones" -> {
@@ -32,23 +45,32 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun playRingtone(uriString: String?) {
+    private fun playRingtone(uriString: String?, volume: Float, loop: Boolean) {
         try {
             stopRingtone()
             val uri: Uri = when {
-                uriString.isNullOrEmpty() || uriString == "default_alarm" ->
+                uriString.isNullOrEmpty() || uriString == "default_alarm" || uriString == "beep" ->
                     RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 uriString == "default_ringtone" ->
                     RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                else -> Uri.parse(uriString)
+                uriString.startsWith("content://") || uriString.startsWith("android.resource://") ->
+                    Uri.parse(uriString)
+                uriString.startsWith("/") ->
+                    Uri.parse("file://$uriString")
+                else ->
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             }
+
             mediaPlayer = MediaPlayer().apply {
-                setAudioAttributes(AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .build())
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .build()
+                )
                 setDataSource(applicationContext, uri)
-                isLooping = true
+                isLooping = loop
+                setVolume(volume, volume)
                 prepare()
                 start()
             }
@@ -57,7 +79,8 @@ class MainActivity : FlutterActivity() {
                 val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 mediaPlayer = MediaPlayer().apply {
                     setDataSource(applicationContext, defaultUri)
-                    isLooping = true
+                    isLooping = loop
+                    setVolume(volume, volume)
                     prepare()
                     start()
                 }
@@ -65,8 +88,15 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun setVolume(volume: Float) {
+        mediaPlayer?.setVolume(volume, volume)
+    }
+
     private fun stopRingtone() {
-        mediaPlayer?.let { if (it.isPlaying) it.stop(); it.release() }
+        mediaPlayer?.let {
+            try { if (it.isPlaying) it.stop() } catch (_: Exception) {}
+            it.release()
+        }
         mediaPlayer = null
     }
 
