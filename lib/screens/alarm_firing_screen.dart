@@ -1,763 +1,431 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
-import 'dart:math';
 import '../theme/app_theme.dart';
 import '../models/alarm.dart';
 import '../services/storage_service.dart';
-import '../services/audio_service.dart';
+import 'add_alarm_screen.dart';
+import 'alarm_firing_screen.dart';
 
-class AlarmFiringScreen extends StatefulWidget {
-  final Alarm alarm;
-  final VoidCallback onDismiss;
-
-  const AlarmFiringScreen({super.key, required this.alarm, required this.onDismiss});
-
+class AlarmsScreen extends StatefulWidget {
+  const AlarmsScreen({super.key});
   @override
-  State<AlarmFiringScreen> createState() => _AlarmFiringScreenState();
+  State<AlarmsScreen> createState() => _AlarmsScreenState();
 }
 
-class _AlarmFiringScreenState extends State<AlarmFiringScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _bellController;
-  late AnimationController _glowController;
-
-  int _challengesPassed = 0;
-  int _challengesTotal = 3;
-  String _challengeType = 'math';
-  String _difficulty = 'easy';
-  int _snoozeCount = 0;
-
-  // Challenge timer
-  Timer? _timer;
-  int _timerLeft = 30;
-  int _timerMax = 30;
-
-  // Math challenge
-  String _equation = '';
-  int _correctAnswer = 0;
-  List<int> _options = [];
-
-  // Shake challenge
-  int _shakeCount = 0;
-  int _shakeTarget = 20;
-
-  // Pattern challenge
-  List<Color> _patternColors = [];
-  List<int> _pattern = [];
-  List<int> _userPattern = [];
-  bool _showingPattern = false;
-  String _patternMsg = '';
-
-  // Cultura/Trivia
-  String _question = '';
-  List<String> _qOptions = [];
-  int _correctIdx = 0;
-  bool _answered = false;
-
-  String _feedbackText = '';
-  bool _feedbackOk = false;
+class _AlarmsScreenState extends State<AlarmsScreen> {
+  List<Alarm> _alarms = [];
+  Timer? _clockTimer;
+  Timer? _alarmChecker;
+  String _currentTime = '';
+  String _currentDate = '';
+  int _totalSnooze = 0;
+  int _totalDismiss = 0;
+  bool _firingInProgress = false;
 
   @override
   void initState() {
     super.initState();
-    _bellController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    )..repeat(reverse: true);
-    _glowController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
-
-    _difficulty = widget.alarm.difficulty;
-    final snoozed = widget.alarm.snoozeCount;
-    if (snoozed >= 6) _difficulty = 'hard';
-    else if (snoozed >= 3 && _difficulty == 'easy') _difficulty = 'medium';
-
-    _challengesTotal = _difficulty == 'easy' ? 2 : _difficulty == 'medium' ? 3 : 4;
-
-    String ct = widget.alarm.challenge;
-    if (ct == 'random') {
-      const types = ['math', 'incognita', 'sequence', 'shake', 'typing', 'pattern', 'cultura'];
-      ct = types[Random().nextInt(types.length)];
-    }
-    _challengeType = ct;
-    _loadChallenge();
-    _startBellVibration();
-  }
-
-  void _startBellVibration() {
-    // Reproducir el tono de alarma configurado
-    AudioService.play(widget.alarm.sound, loop: true);
-    // Vibración continua
-    Timer.periodic(const Duration(milliseconds: 1200), (t) {
-      if (!mounted) { t.cancel(); return; }
-      HapticFeedback.heavyImpact();
-    });
-  }
-
-  void _startTimer() {
-    _timer?.cancel();
-    _timerMax = _difficulty == 'easy' ? 45 : _difficulty == 'medium' ? 30 : 20;
-    _timerLeft = _timerMax;
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) { t.cancel(); return; }
-      setState(() { _timerLeft--; });
-      if (_timerLeft <= 0) {
-        t.cancel();
-        _penalize();
-      }
-    });
-  }
-
-  void _penalize() {
-    HapticFeedback.heavyImpact();
-    setState(() { _feedbackText = '⏱ ¡Tiempo! Intenta de nuevo'; _feedbackOk = false; });
-    Future.delayed(const Duration(milliseconds: 1300), () {
-      if (mounted) _loadChallenge();
-    });
-  }
-
-  void _loadChallenge() {
-    _timer?.cancel();
-    setState(() { _feedbackText = ''; _answered = false; _shakeCount = 0; });
-
-    switch (_challengeType) {
-      case 'math': _loadMath(); break;
-      case 'incognita': _loadIncognita(); break;
-      case 'shake': _loadShake(); break;
-      case 'pattern': _loadPattern(); break;
-      case 'cultura': _loadCultura(); break;
-      default: _loadMath();
-    }
-
-    if (_challengeType != 'shake') _startTimer();
-  }
-
-  void _loadMath() {
-    final rng = Random();
-    final ops = _difficulty == 'easy' ? ['+'] :
-                _difficulty == 'medium' ? ['+', '-'] : ['+', '-', '×'];
-    final op = ops[rng.nextInt(ops.length)];
-    final max = _difficulty == 'easy' ? 20 : _difficulty == 'medium' ? 60 : 120;
-    int a, b, ans;
-    if (op == '+') { a = rng.nextInt(max) + 2; b = rng.nextInt(max) + 2; ans = a + b; }
-    else if (op == '-') { a = rng.nextInt(max ~/ 2) + max ~/ 2; b = rng.nextInt(a) + 1; ans = a - b; }
-    else { a = rng.nextInt(12) + 2; b = rng.nextInt(12) + 2; ans = a * b; }
-    final sp = _difficulty == 'easy' ? 10 : _difficulty == 'medium' ? 25 : 60;
-    final wrongs = <int>{};
-    while (wrongs.length < 3) {
-      final w = ans + rng.nextInt(sp * 2 + 1) - sp;
-      if (w != ans && w > 0) wrongs.add(w);
-    }
-    final opts = [...wrongs, ans]..shuffle();
-    setState(() { _equation = '$a $op $b = ?'; _correctAnswer = ans; _options = opts; });
-  }
-
-  void _loadIncognita() {
-    final rng = Random();
-    int x, a, b, ans;
-    String eq;
-    if (_difficulty == 'easy') {
-      x = rng.nextInt(20) + 1; b = rng.nextInt(20) + 1; ans = x;
-      eq = 'X + $b = ${x + b}';
-    } else {
-      a = rng.nextInt(8) + 2; x = rng.nextInt(20) + 1; b = rng.nextInt(30) + 1; ans = x;
-      eq = '${a}X + $b = ${a * x + b}';
-    }
-    final sp = 15;
-    final wrongs = <int>{};
-    while (wrongs.length < 3) {
-      final w = ans + rng.nextInt(sp * 2 + 1) - sp;
-      if (w != ans && w > 0) wrongs.add(w);
-    }
-    final opts = [...wrongs, ans]..shuffle();
-    setState(() { _equation = eq; _correctAnswer = ans; _options = opts; });
-  }
-
-  void _loadShake() {
-    _shakeTarget = _difficulty == 'easy' ? 15 : _difficulty == 'medium' ? 25 : 40;
-    setState(() { _shakeCount = 0; });
-  }
-
-  void _loadPattern() {
-    final size = _difficulty == 'easy' ? 3 : _difficulty == 'medium' ? 4 : 5;
-    final len = _difficulty == 'easy' ? 3 : _difficulty == 'medium' ? 5 : 7;
-    final showMs = _difficulty == 'easy' ? 600 : _difficulty == 'medium' ? 480 : 350;
-    final colors = [AppTheme.red, AppTheme.blue, AppTheme.green, AppTheme.orange, AppTheme.purple];
-    _patternColors = colors.sublist(0, size);
-    _pattern = List.generate(len, (_) => Random().nextInt(size));
-    _userPattern = [];
-    _showingPattern = true;
-    _patternMsg = 'Observa el patrón...';
-    setState(() {});
-    _showPatternAnimation(showMs);
-  }
-
-  void _showPatternAnimation(int showMs) async {
-    for (int i = 0; i < _pattern.length; i++) {
-      if (!mounted) return;
-      setState(() {});
-      await Future.delayed(Duration(milliseconds: showMs));
-    }
-    if (mounted) {
-      setState(() { _showingPattern = false; _patternMsg = '¡Repite el patrón!'; });
-    }
-  }
-
-  void _loadCultura() {
-    final bank = _culturaBank[_difficulty] ?? _culturaBank['easy']!;
-    final q = bank[Random().nextInt(bank.length)];
-    setState(() {
-      _question = q['q'] as String;
-      _qOptions = List<String>.from(q['opts'] as List);
-      _correctIdx = q['ans'] as int;
-      _answered = false;
-    });
-  }
-
-  void _advance() {
-    _timer?.cancel();
-    HapticFeedback.mediumImpact();
-    _challengesPassed++;
-    if (_challengesPassed >= _challengesTotal) {
-      _dismiss();
-    } else {
-      const types = ['math', 'incognita', 'shake', 'pattern', 'cultura'];
-      final idx = types.indexOf(_challengeType);
-      _challengeType = types[(idx + 1) % types.length];
-      setState(() {});
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted) _loadChallenge();
-      });
-    }
-  }
-
-  void _dismiss() async {
-    _timer?.cancel();
-    _bellController.stop();
-    _glowController.stop();
-    await AudioService.stop();
-
-    final history = await StorageService.loadHistory();
-    history.insert(0, {
-      'id': DateTime.now().millisecondsSinceEpoch,
-      'name': widget.alarm.label,
-      'time': widget.alarm.timeStr,
-      'snoozes': _snoozeCount,
-      'challenge': widget.alarm.challenge,
-      'ts': DateTime.now().toIso8601String(),
-    });
-    if (history.length > 50) history.removeLast();
-    await StorageService.saveHistory(history);
-
-    final stats = await StorageService.loadStats();
-    stats['dismiss'] = (stats['dismiss'] ?? 0) + 1;
-    await StorageService.saveStats(stats);
-
-    widget.onDismiss();
-    if (mounted) Navigator.pop(context);
-  }
-
-  void _snooze() async {
-    _timer?.cancel();
-    await AudioService.stop();
-    _snoozeCount++;
-    widget.alarm.snoozeCount++;
-    final now = DateTime.now().add(const Duration(minutes: 5));
-    widget.alarm.hour = now.hour;
-    widget.alarm.minute = now.minute;
-    widget.alarm.fired = false;
-    widget.alarm.enabled = true;
-
-    final alarms = await StorageService.loadAlarms();
-    final idx = alarms.indexWhere((a) => a.id == widget.alarm.id);
-    if (idx >= 0) alarms[idx] = widget.alarm;
-    await StorageService.saveAlarms(alarms);
-
-    final stats = await StorageService.loadStats();
-    stats['snooze'] = (stats['snooze'] ?? 0) + 1;
-    await StorageService.saveStats(stats);
-
-    widget.onDismiss();
-    if (mounted) Navigator.pop(context);
+    _loadAlarms();
+    _loadStats();
+    _startClock();
+    _startChecker();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
-    AudioService.stop();
-    _bellController.dispose();
-    _glowController.dispose();
+    _clockTimer?.cancel();
+    _alarmChecker?.cancel();
     super.dispose();
+  }
+
+  void _startClock() {
+    _updateClock();
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
+  }
+
+  void _updateClock() {
+    final now = DateTime.now();
+    final h = now.hour.toString().padLeft(2, '0');
+    final m = now.minute.toString().padLeft(2, '0');
+    final s = now.second.toString().padLeft(2, '0');
+    const days = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+    const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    if (mounted) setState(() {
+      _currentTime = '$h:$m:$s';
+      _currentDate = '${days[now.weekday % 7]} ${now.day} ${months[now.month - 1]} ${now.year}';
+    });
+  }
+
+  void _startChecker() {
+    _alarmChecker = Timer.periodic(const Duration(seconds: 15), (_) => _checkAlarms());
+  }
+
+  void _checkAlarms() {
+    if (_firingInProgress) return;
+    final now = DateTime.now();
+    for (final alarm in _alarms) {
+      if (!alarm.enabled || alarm.fired) continue;
+      if (alarm.hour == now.hour && alarm.minute == now.minute) {
+        final dayIdx = (now.weekday - 1) % 7;
+        if (alarm.days.isEmpty || alarm.days.contains(dayIdx)) {
+          _fireAlarm(alarm);
+          break;
+        }
+      }
+    }
+  }
+
+  void _fireAlarm(Alarm alarm, {bool isTest = false}) async {
+    if (_firingInProgress && !isTest) return;
+    _firingInProgress = true;
+
+    if (!isTest) {
+      alarm.fired = true;
+      if (alarm.days.isEmpty) alarm.enabled = false;
+      await StorageService.saveAlarms(_alarms);
+    }
+
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AlarmFiringScreen(
+          alarm: alarm,
+          onDismiss: () async {
+            setState(() {});
+            await _loadStats();
+            // ⛓ Si tiene alarma en cadena, dispararla después de 2 segundos
+            if (alarm.chainId != null) {
+              final chainAlarm = _alarms.where((a) => a.id == alarm.chainId).firstOrNull;
+              if (chainAlarm != null && chainAlarm.enabled) {
+                Future.delayed(const Duration(seconds: 2), () {
+                  if (mounted) {
+                    _showChainSnack(chainAlarm.label);
+                    Future.delayed(const Duration(seconds: 2), () {
+                      if (mounted) _fireAlarm(chainAlarm);
+                    });
+                  }
+                });
+              }
+            }
+          },
+        ),
+        fullscreenDialog: true,
+      ),
+    );
+    _firingInProgress = false;
+  }
+
+  void _showChainSnack(String label) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          const Text('⛓ ', style: TextStyle(fontSize: 18)),
+          Text('Siguiente en cadena: $label', style: const TextStyle(color: AppTheme.textColor)),
+        ]),
+        backgroundColor: AppTheme.s2,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: AppTheme.teal.withOpacity(0.4)),
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _loadAlarms() async {
+    final alarms = await StorageService.loadAlarms();
+    alarms.sort((a, b) {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return (a.hour * 60 + a.minute).compareTo(b.hour * 60 + b.minute);
+    });
+    if (mounted) setState(() => _alarms = alarms);
+  }
+
+  Future<void> _loadStats() async {
+    final stats = await StorageService.loadStats();
+    if (mounted) setState(() {
+      _totalSnooze = stats['snooze'] ?? 0;
+      _totalDismiss = stats['dismiss'] ?? 0;
+    });
+  }
+
+  Future<void> _toggleAlarm(Alarm alarm) async {
+    setState(() { alarm.enabled = !alarm.enabled; alarm.fired = false; });
+    await StorageService.saveAlarms(_alarms);
+    HapticFeedback.lightImpact();
+  }
+
+  Future<void> _deleteAlarm(Alarm alarm) async {
+    setState(() => _alarms.remove(alarm));
+    await StorageService.saveAlarms(_alarms);
+    HapticFeedback.mediumImpact();
+  }
+
+  Future<void> _pinAlarm(Alarm alarm) async {
+    setState(() {
+      alarm.pinned = !alarm.pinned;
+      _alarms.sort((a, b) {
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return (a.hour * 60 + a.minute).compareTo(b.hour * 60 + b.minute);
+      });
+    });
+    await StorageService.saveAlarms(_alarms);
+    HapticFeedback.selectionClick();
+  }
+
+  Color _parseColor(String hex) {
+    try { return Color(int.parse(hex.replaceFirst('#', 'FF'), radix: 16)); }
+    catch (_) { return AppTheme.red; }
+  }
+
+  String _nextAlarmText() {
+    final active = _alarms.where((a) => a.enabled).toList();
+    if (active.isEmpty) return '';
+    final now = DateTime.now();
+    final nowMin = now.hour * 60 + now.minute;
+    Alarm? best; int bestDiff = 9999;
+    for (final a in active) {
+      int diff = a.hour * 60 + a.minute - nowMin;
+      if (diff <= 0) diff += 1440;
+      if (diff < bestDiff) { bestDiff = diff; best = a; }
+    }
+    if (best == null) return '';
+    final h = bestDiff ~/ 60;
+    final m = bestDiff % 60;
+    final timeStr = h > 0 ? 'en ${h}h ${m}m' : 'en ${m}m';
+    return '${best.timeStr} · ${best.label} ($timeStr)';
+  }
+
+  String? _chainLabel(Alarm alarm) {
+    if (alarm.chainId == null) return null;
+    final chain = _alarms.where((a) => a.id == alarm.chainId).firstOrNull;
+    return chain != null ? '→ ${chain.label} ${chain.timeStr}' : null;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bg,
-      body: Stack(
-        children: [
-          // Glow de fondo animado
-          AnimatedBuilder(
-            animation: _glowController,
-            builder: (_, __) => Container(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: const Alignment(0, -0.4),
-                  radius: 1.2,
-                  colors: [
-                    AppTheme.red.withOpacity(0.12 * _glowController.value),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                // Header
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
-                  child: Column(
-                    children: [
-                      AnimatedBuilder(
-                        animation: _bellController,
-                        builder: (_, __) => Transform.rotate(
-                          angle: (_bellController.value - 0.5) * 0.4,
-                          child: const Text('⏰', style: TextStyle(fontSize: 56)),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.alarm.label.toUpperCase(),
-                        style: const TextStyle(fontSize: 11, color: AppTheme.muted, letterSpacing: 3),
-                      ),
-                      Text(
-                        widget.alarm.timeStr,
-                        style: const TextStyle(
-                          fontSize: 72, fontWeight: FontWeight.w800,
-                          color: AppTheme.red, letterSpacing: -2, height: 1,
-                        ),
-                      ),
-                      if (_snoozeCount > 0)
-                        Text('😴 Snooze ×$_snoozeCount',
-                            style: const TextStyle(fontSize: 11, color: AppTheme.orange)),
-                    ],
-                  ),
-                ),
-
-                // Progress dots
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: Row(
-                    children: List.generate(_challengesTotal, (i) => Expanded(
-                      child: Container(
-                        height: 4,
-                        margin: const EdgeInsets.symmetric(horizontal: 2),
-                        decoration: BoxDecoration(
-                          color: i < _challengesPassed ? AppTheme.green :
-                                 i == _challengesPassed ? AppTheme.red : AppTheme.s3,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    )),
-                  ),
-                ),
-
-                // Timer bar
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(3),
-                          child: LinearProgressIndicator(
-                            value: _timerMax > 0 ? _timerLeft / _timerMax : 1,
-                            backgroundColor: AppTheme.s3,
-                            valueColor: AlwaysStoppedAnimation(
-                              _timerLeft / _timerMax < 0.35 ? AppTheme.red : AppTheme.green,
-                            ),
-                            minHeight: 5,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 24,
-                        child: Text('$_timerLeft',
-                            style: const TextStyle(fontSize: 11, color: AppTheme.muted)),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // Challenge box
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: AppTheme.s1,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: AppTheme.red.withOpacity(0.2)),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _challengeLabel(),
-                                style: const TextStyle(fontSize: 9, color: AppTheme.orange,
-                                    letterSpacing: 3, fontWeight: FontWeight.w600),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: _diffColor().withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  _difficulty == 'easy' ? 'FÁCIL' :
-                                  _difficulty == 'medium' ? 'MEDIO' : 'DIFÍCIL',
-                                  style: TextStyle(fontSize: 8, color: _diffColor(),
-                                      fontWeight: FontWeight.w600, letterSpacing: 1),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          _buildChallenge(),
-                          if (_feedbackText.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Text(_feedbackText,
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    color: _feedbackOk ? AppTheme.green : AppTheme.red,
-                                    fontWeight: FontWeight.w600)),
-                          ],
-                        ],
-                      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // RELOJ
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+              child: Column(children: [
+                Text(_currentTime,
+                    style: const TextStyle(fontSize: 54, fontWeight: FontWeight.w800,
+                        color: AppTheme.textColor, letterSpacing: -2, height: 1)),
+                const SizedBox(height: 4),
+                Text(_currentDate, style: const TextStyle(fontSize: 11, color: AppTheme.muted, letterSpacing: 2)),
+                if (_nextAlarmText().isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.red.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: AppTheme.red.withOpacity(0.25)),
                     ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.circle, size: 7, color: AppTheme.red),
+                      const SizedBox(width: 6),
+                      Text(_nextAlarmText(),
+                          style: const TextStyle(fontSize: 11, color: AppTheme.red, letterSpacing: 0.5)),
+                    ]),
                   ),
-                ),
-
-                // Bottom
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-                  child: Column(
-                    children: [
-                      Text('Reto ${_challengesPassed + 1} de $_challengesTotal',
-                          style: const TextStyle(fontSize: 10, color: AppTheme.muted, letterSpacing: 2)),
-                      const SizedBox(height: 10),
-                      TextButton(
-                        onPressed: _snooze,
-                        child: const Text('⏸ Posponer 5 min',
-                            style: TextStyle(color: AppTheme.muted, fontSize: 12, letterSpacing: 1.5)),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildChallenge() {
-    switch (_challengeType) {
-      case 'math':
-      case 'incognita':
-        return _buildMathChallenge();
-      case 'shake':
-        return _buildShakeChallenge();
-      case 'pattern':
-        return _buildPatternChallenge();
-      case 'cultura':
-        return _buildCulturaChallenge();
-      default:
-        return _buildMathChallenge();
-    }
-  }
-
-  Widget _buildMathChallenge() {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
-          decoration: BoxDecoration(
-            color: AppTheme.s2,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            _challengeType == 'incognita' ? 'Encuentra el valor de X:' : _equation,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppTheme.textColor),
-          ),
-        ),
-        if (_challengeType == 'incognita') ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-            decoration: BoxDecoration(
-              color: AppTheme.purple.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(_equation,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800,
-                    color: AppTheme.purple, letterSpacing: 2)),
-          ),
-        ],
-        const SizedBox(height: 14),
-        GridView.count(
-          crossAxisCount: 2,
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          childAspectRatio: 2.2,
-          children: _options.map((opt) => _mathButton(opt)).toList(),
-        ),
-      ],
-    );
-  }
-
-  Widget _mathButton(int opt) {
-    final label = _challengeType == 'incognita' ? 'X = $opt' : '$opt';
-    return ElevatedButton(
-      onPressed: () => _checkMath(opt),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppTheme.s2,
-        foregroundColor: AppTheme.textColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        elevation: 0,
-        side: BorderSide(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: Text(label,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-    );
-  }
-
-  void _checkMath(int val) {
-    if (val == _correctAnswer) {
-      setState(() { _feedbackText = '✓ ¡Correcto!'; _feedbackOk = true; });
-      Future.delayed(const Duration(milliseconds: 600), () { if (mounted) _advance(); });
-    } else {
-      HapticFeedback.heavyImpact();
-      setState(() { _feedbackText = '✗ Incorrecto, intenta de nuevo'; _feedbackOk = false; });
-    }
-  }
-
-  Widget _buildShakeChallenge() {
-    final pct = _shakeTarget > 0 ? _shakeCount / _shakeTarget : 0.0;
-    return Column(
-      children: [
-        Text('Presiona el botón $_shakeTarget veces',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textColor)),
-        const SizedBox(height: 14),
-        RichText(
-          text: TextSpan(
-            children: [
-              TextSpan(text: '$_shakeCount',
-                  style: const TextStyle(fontSize: 64, fontWeight: FontWeight.w800, color: AppTheme.red, height: 1)),
-              TextSpan(text: ' / $_shakeTarget',
-                  style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: AppTheme.muted, height: 1)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: pct.toDouble(),
-            backgroundColor: AppTheme.s3,
-            valueColor: const AlwaysStoppedAnimation(AppTheme.red),
-            minHeight: 6,
-          ),
-        ),
-        const SizedBox(height: 20),
-        GestureDetector(
-          onTap: () {
-            HapticFeedback.mediumImpact();
-            setState(() { _shakeCount++; });
-            if (_shakeCount >= _shakeTarget) {
-              setState(() { _feedbackText = '✓ ¡Excelente!'; _feedbackOk = true; });
-              Future.delayed(const Duration(milliseconds: 500), () { if (mounted) _advance(); });
-            }
-          },
-          child: Container(
-            width: 100, height: 100,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                  colors: [AppTheme.red, AppTheme.orange],
-                  begin: Alignment.topLeft, end: Alignment.bottomRight),
-              shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: AppTheme.red.withOpacity(0.4), blurRadius: 20)],
-            ),
-            child: const Center(child: Text('📳', style: TextStyle(fontSize: 36))),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPatternChallenge() {
-    final size = _patternColors.length;
-    return Column(
-      children: [
-        Text('Observa y repite el patrón',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textColor)),
-        const SizedBox(height: 8),
-        Text(_patternMsg, style: const TextStyle(fontSize: 11, color: AppTheme.muted, letterSpacing: 1)),
-        const SizedBox(height: 14),
-        GridView.count(
-          crossAxisCount: size,
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          children: List.generate(size, (i) {
-            final col = _patternColors[i];
-            final isNext = !_showingPattern && _userPattern.length < _pattern.length
-                && _pattern[_userPattern.length] == i;
-            return GestureDetector(
-              onTap: _showingPattern ? null : () => _tapPattern(i),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                decoration: BoxDecoration(
-                  color: isNext ? col.withOpacity(0.3) : col.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: col.withOpacity(0.4), width: 2),
-                ),
-              ),
-            );
-          }),
-        ),
-      ],
-    );
-  }
-
-  void _tapPattern(int idx) {
-    HapticFeedback.selectionClick();
-    final expected = _pattern[_userPattern.length];
-    _userPattern.add(idx);
-    if (idx != expected) {
-      HapticFeedback.heavyImpact();
-      setState(() { _feedbackText = '✗ Incorrecto'; _feedbackOk = false; });
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        if (mounted) { _userPattern.clear(); _loadPattern(); }
-      });
-      return;
-    }
-    if (_userPattern.length == _pattern.length) {
-      setState(() { _feedbackText = '✓ ¡Correcto!'; _feedbackOk = true; });
-      Future.delayed(const Duration(milliseconds: 700), () { if (mounted) _advance(); });
-    } else {
-      setState(() {});
-    }
-  }
-
-  Widget _buildCulturaChallenge() {
-    final labels = ['A', 'B', 'C', 'D'];
-    return Column(
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppTheme.s2,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(_question,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600,
-                  color: AppTheme.textColor, height: 1.4)),
-        ),
-        const SizedBox(height: 12),
-        ...List.generate(_qOptions.length, (i) => Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: GestureDetector(
-            onTap: _answered ? null : () => _checkCultura(i),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-              decoration: BoxDecoration(
-                color: _answered && i == _correctIdx ? AppTheme.green.withOpacity(0.15) :
-                       AppTheme.s2,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _answered && i == _correctIdx ? AppTheme.green :
-                         Colors.white.withOpacity(0.06),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text('${labels[i]}.  ',
-                      style: TextStyle(fontSize: 11, color: _answered && i == _correctIdx
-                          ? AppTheme.green : AppTheme.muted, fontWeight: FontWeight.w700)),
-                  Expanded(child: Text(_qOptions[i],
-                      style: const TextStyle(fontSize: 13, color: AppTheme.textColor))),
                 ],
+              ]),
+            ),
+
+            // MINI STATS
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                _miniStat('${_alarms.length}', 'Alarmas', AppTheme.red),
+                const SizedBox(width: 8),
+                _miniStat('$_totalSnooze', 'Snoozes', AppTheme.orange),
+                const SizedBox(width: 8),
+                _miniStat('$_totalDismiss', 'Resueltas', AppTheme.green),
+              ]),
+            ),
+            const SizedBox(height: 14),
+
+            // HEADER LISTA
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                const Text('MIS ALARMAS',
+                    style: TextStyle(fontSize: 10, color: AppTheme.muted, letterSpacing: 3, fontWeight: FontWeight.w600)),
+                TextButton.icon(
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AddAlarmScreen()),
+                    );
+                    _loadAlarms();
+                  },
+                  icon: const Icon(Icons.add, size: 16, color: AppTheme.red),
+                  label: const Text('Nueva', style: TextStyle(color: AppTheme.red, fontSize: 12)),
+                ),
+              ]),
+            ),
+
+            // LISTA
+            Expanded(
+              child: _alarms.isEmpty ? _emptyState() :
+              ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _alarms.length,
+                itemBuilder: (_, i) => _alarmCard(_alarms[i]),
               ),
             ),
-          ),
-        )),
-      ],
+          ],
+        ),
+      ),
     );
   }
 
-  void _checkCultura(int idx) {
-    setState(() { _answered = true; });
-    if (idx == _correctIdx) {
-      setState(() { _feedbackText = '✓ ¡Correcto!'; _feedbackOk = true; });
-      Future.delayed(const Duration(milliseconds: 1200), () { if (mounted) _advance(); });
-    } else {
-      HapticFeedback.heavyImpact();
-      setState(() { _feedbackText = '✗ Incorrecto'; _feedbackOk = false; });
-      Future.delayed(const Duration(milliseconds: 2500), () {
-        if (mounted) { _loadCultura(); }
-      });
-    }
-  }
+  Widget _miniStat(String value, String label, Color color) => Expanded(
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      decoration: BoxDecoration(color: AppTheme.s1, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withOpacity(0.06))),
+      child: Column(children: [
+        Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: color, height: 1)),
+        const SizedBox(height: 3),
+        Text(label, style: const TextStyle(fontSize: 9, color: AppTheme.muted, letterSpacing: 1)),
+      ]),
+    ),
+  );
 
-  String _challengeLabel() {
-    const labels = {
-      'math': '🧮 MATEMÁTICAS', 'incognita': '🧮 ECUACIÓN X',
-      'shake': '📳 AGITAR', 'pattern': '🟦 PATRÓN VISUAL',
-      'cultura': '🔬 CULTURA GENERAL',
+  Widget _alarmCard(Alarm alarm) {
+    final col = _parseColor(alarm.color);
+    final diffColors = {'easy': AppTheme.green, 'medium': AppTheme.orange, 'hard': AppTheme.red};
+    final diffLabels = {'easy': 'Fácil', 'medium': 'Medio', 'hard': 'Difícil'};
+    final challengeLabels = {
+      'math':'🧮 Mates','incognita':'🧮 Ecuación X','sequence':'🔢 Secuencia',
+      'shake':'📳 Agitar','typing':'⌨️ Escribir','pattern':'🟦 Patrón',
+      'sudoku':'🧩 Sudoku','anagram':'🔤 Anagrama','cultura':'🔬 Cultura',
+      'trivia':'🧠 Trivia IA','random':'🎲 Aleatorio',
     };
-    return labels[_challengeType] ?? 'RETO';
+    final chain = _chainLabel(alarm);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Color.lerp(AppTheme.s1, col, 0.04),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: alarm.pinned ? AppTheme.yellow.withOpacity(0.3) : Colors.white.withOpacity(0.06),
+        ),
+      ),
+      child: Stack(children: [
+        // Barra lateral
+        Positioned(left: 0, top: 0, bottom: 0,
+          child: Container(width: 4,
+            decoration: BoxDecoration(
+              color: alarm.enabled ? col : AppTheme.muted,
+              borderRadius: const BorderRadius.only(topLeft: Radius.circular(18), bottomLeft: Radius.circular(18)),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 13, 12, 13),
+          child: Row(children: [
+            Expanded(child: Opacity(
+              opacity: alarm.enabled ? 1.0 : 0.38,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(alarm.timeStr,
+                    style: TextStyle(fontSize: 34, fontWeight: FontWeight.w800,
+                        color: alarm.enabled ? AppTheme.textColor : AppTheme.muted, height: 1, letterSpacing: -1)),
+                const SizedBox(height: 6),
+                Wrap(spacing: 5, runSpacing: 4, children: [
+                  if (alarm.pinned) _tag('📌', AppTheme.yellow),
+                  _tag(alarm.label, AppTheme.muted),
+                  _tag(alarm.daysStr, AppTheme.blue),
+                  _tag(challengeLabels[alarm.challenge] ?? '?', AppTheme.purple),
+                  _tag(diffLabels[alarm.difficulty] ?? 'Fácil', diffColors[alarm.difficulty] ?? AppTheme.green),
+                  if (alarm.gradual) _tag('🌅 Gradual', AppTheme.green),
+                  if (alarm.snoozeCount > 0) _tag('😴×${alarm.snoozeCount}', AppTheme.orange),
+                  if (chain != null) _tag('⛓ $chain', AppTheme.teal),
+                ]),
+                const SizedBox(height: 8),
+                GestureDetector(
+                  onTap: () => _fireAlarm(alarm, isTest: true),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: const Text('▶ Probar',
+                        style: TextStyle(fontSize: 10, color: AppTheme.muted, letterSpacing: 0.5)),
+                  ),
+                ),
+              ]),
+            )),
+            Column(children: [
+              Switch(value: alarm.enabled, onChanged: (_) => _toggleAlarm(alarm),
+                  activeColor: AppTheme.red, inactiveThumbColor: AppTheme.muted, inactiveTrackColor: AppTheme.s3),
+              IconButton(
+                icon: Icon(alarm.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                    size: 18, color: alarm.pinned ? AppTheme.yellow : AppTheme.muted),
+                onPressed: () => _pinAlarm(alarm),
+                padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.muted),
+                onPressed: () => _showDeleteDialog(alarm),
+                padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+            ]),
+          ]),
+        ),
+      ]),
+    );
   }
 
-  Color _diffColor() => _difficulty == 'easy' ? AppTheme.green :
-      _difficulty == 'medium' ? AppTheme.orange : AppTheme.red;
+  Widget _tag(String text, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(5)),
+    child: Text(text, style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w600)),
+  );
 
-  // Banco de preguntas de cultura general
-  static const _culturaBank = {
-    'easy': [
-      {'q': '¿Cuántos continentes tiene la Tierra?', 'opts': ['5','6','7','8'], 'ans': 2},
-      {'q': '¿Cuál es el animal terrestre más rápido?', 'opts': ['León','Guepardo','Caballo','Antílope'], 'ans': 1},
-      {'q': '¿Cuántos meses tiene un año?', 'opts': ['10','11','12','13'], 'ans': 2},
-      {'q': '¿Cuál es la capital de Francia?', 'opts': ['Madrid','París','Roma','Londres'], 'ans': 1},
-    ],
-    'medium': [
-      {'q': '¿Cuál es el río más largo del mundo?', 'opts': ['Amazonas','Nilo','Yangtsé','Danubio'], 'ans': 1},
-      {'q': '¿En qué año llegó el hombre a la Luna?', 'opts': ['1965','1967','1969','1972'], 'ans': 2},
-      {'q': '¿Cuántos huesos tiene el cuerpo humano adulto?', 'opts': ['196','206','216','226'], 'ans': 1},
-      {'q': '¿Quién pintó La Mona Lisa?', 'opts': ['Miguel Ángel','Rafael','Leonardo da Vinci','Botticelli'], 'ans': 2},
-    ],
-    'hard': [
-      {'q': '¿En qué año fue fundada Constantinopla?', 'opts': ['230 d.C.','284 d.C.','330 d.C.','395 d.C.'], 'ans': 2},
-      {'q': '¿Cuál es el símbolo químico del wolframio?', 'opts': ['Wo','Wf','W','Wm'], 'ans': 2},
-      {'q': '¿Qué escritor colombiano ganó el Nobel de Literatura en 1982?', 'opts': ['Jorge Isaacs','Gabriel García Márquez','Tomás González','Álvaro Mutis'], 'ans': 1},
-    ],
-  };
+  Widget _emptyState() => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+    const Icon(Icons.alarm_off, size: 56, color: AppTheme.muted),
+    const SizedBox(height: 16),
+    const Text('Sin alarmas todavía', style: TextStyle(fontSize: 14, color: AppTheme.muted, fontWeight: FontWeight.w600)),
+    const SizedBox(height: 8),
+    const Text('Pulsa + Nueva para crear una', style: TextStyle(fontSize: 12, color: AppTheme.muted)),
+    const SizedBox(height: 24),
+    ElevatedButton.icon(
+      onPressed: () async {
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AddAlarmScreen()));
+        _loadAlarms();
+      },
+      icon: const Icon(Icons.add),
+      label: const Text('CREAR ALARMA'),
+      style: ElevatedButton.styleFrom(minimumSize: const Size(200, 48)),
+    ),
+  ]));
+
+  void _showDeleteDialog(Alarm alarm) => showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      backgroundColor: AppTheme.s1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      title: const Text('Eliminar alarma', style: TextStyle(color: AppTheme.textColor)),
+      content: Text('¿Eliminar "${alarm.label}"?', style: const TextStyle(color: AppTheme.muted)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar', style: TextStyle(color: AppTheme.muted))),
+        TextButton(onPressed: () { Navigator.pop(context); _deleteAlarm(alarm); },
+            child: const Text('Eliminar', style: TextStyle(color: AppTheme.red))),
+      ],
+    ),
+  );
 }
