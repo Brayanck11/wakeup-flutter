@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 import '../models/alarm.dart';
 import '../services/storage_service.dart';
+import '../services/alarm_scheduler.dart';
 import '../services/audio_service.dart';
 import 'sound_picker_screen.dart';
 
@@ -70,6 +71,8 @@ class _AddAlarmScreenState extends State<AddAlarmScreen> {
     );
     alarms.add(alarm);
     await StorageService.saveAlarms(alarms);
+    // Programar en el sistema Android para que suene con pantalla apagada
+    await AlarmScheduler.schedule(alarm);
     HapticFeedback.mediumImpact();
     if (mounted) Navigator.pop(context);
   }
